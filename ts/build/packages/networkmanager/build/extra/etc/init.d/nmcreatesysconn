@@ -233,6 +233,163 @@ EOF
     echo "Finished appending wireless connection configuration..."
 }
 
+create_access_point() {
+	echo "Creating access point..."
+	# Pull arguments from function call
+	$wlan = $1
+	$lan_adapter = $2
+	
+	# If either argument is missing, exit
+	if [ -z "$wlan_adapter" ]; then
+		echo "wlan_adapter not provided. Cannot create access point."
+		exit 0
+	elif [ -z "$lan_adapter" ]; then
+		echo "lan_adapter not provided. Cannot create access point."
+		exit 0
+	fi
+	
+	# Create connection with br0
+	cat <<EOF >> /etc/NetworkManager/system-connections/br0.nmconnection
+[connection]
+id=br0
+uuid=51f7b680-9bac-4a89-b03f-126195faf5dc
+type=bridge
+interface-name=br0
+timestamp=1729712180
+
+[ethernet]
+
+[bridge]
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+		
+EOF
+	# Set permissions and ownership of file for root.
+	chmod 600 /etc/NetworkManager/system-connections/br0.nmconnection
+    chown root:root /etc/NetworkManager/system-connections/br0.nmconnection
+	echo "br0 connection created at /etc/NetworkManager/system-connections/br0.nmconnection..."
+	
+	# Create bridge connection to br0
+	cat <<EOF >> /etc/NetworkManager/system-connections/bridge-br0.nmconnection 
+[connection]
+id=${lan_adapter}-br0
+uuid=b0b1326c-2c2c-4e6f-b675-6311b0fbe211
+type=ethernet
+controller=br0
+interface-name=$lan_adapter
+master=br0
+port-type=bridge
+slave-type=bridge
+
+[ethernet]
+
+[bridge-port]	
+		
+EOF
+	# Set permissions and ownership of file for root.
+	chmod 600 /etc/NetworkManager/system-connections/bridge-br0.nmconnection 
+    chown root:root /etc/NetworkManager/system-connections/bridge-br0.nmconnection 
+	echo "Bridge connection created at /etc/NetworkManager/system-connections/bridge-br0.nmconnection..."
+	
+	# Create hostapd.conf
+	cat <<EOF >> /etc/hostapd.conf
+bridge=br0
+interface=$wlan_adapter
+hw_mode=a
+channel=36
+country_code=US
+ieee80211d=1
+ssid=$WIRELESS_ESSID
+wpa_passphrase=$WIRELESS_WPAKEY
+driver=nl80211
+logger_syslog=1
+logger_syslog_level=2
+ctrl_interface=/var/run/hostapd
+ctrl_interface_group=0
+tx_queue_data2_burst=2.0
+uapsd_advertisement_enabled=1
+utf8_ssid=1
+multi_ap=0
+bss_load_update_period=60
+chan_util_avg_period=600
+disassoc_low_ack=0
+skip_inactivity_poll=1
+preamble=1
+
+EOF
+	# Set permissions and ownership of file for root.
+	chmod 600 /etc/hostapd.conf
+    chown root:root /etc/hostapd.conf
+	echo "hostapd configuration created at /etc/hostapd/hostapd.conf..."
+	
+	echo "Access point successfully created."
+	return 0
+}
+
+create_wireless_mesh() {
+	echo "Creating wireless mesh..."
+	
+	# Will not create mesh wihtout wpakey and essid from thinstation.conf.buildtime
+	if [ -z "$WIRELESS_WPAKEY" ]; then
+		echo "Error: WIRELESS_WPAKEY for AP not found in thinstation.conf.buildtime. Mesh will not be built."
+		exit 0
+	elif [ -z "$WIRELESS_ESSID" ]; then
+		echo "Error: WIRELESS_ESSID for AP not found in thinstation.conf.buildtime. Mesh will not be built."
+		exit 0
+	fi
+	
+	# Determine presence of adapters	
+	for adapter in ~/sys/class/net/*; do
+		adapter_name=$(basename "$adapter")
+		
+		# An adapter with a wireless dir is a wireless adapter
+		if [ -z "$wlan_adapter" ] && [ -e "$adapter/wireless" ]; then
+			echo "Wireless adapter found: $adapter_name"
+			$wlan_adapter=$adapter_name
+			break
+		# An adapter with a carrier is an ethernet adapter
+		elif [ -z $lan_adapter ] && [ -e "$adapter/carrier" ]; then
+			timer=150
+			# Wait for up to 15 seconds to find carrier
+			while [ $timer != 0 ]; do
+				carrier=$(cat "$adapter/carrier")
+				if [ "$carrier" -eq 1 ]; then
+					echo "Ethernet adapter with carrier found: $adapter"
+					$lan_adapter=$adapter
+					break
+				else
+					sleep 0.1
+					let timer-=1
+				fi
+			done
+			
+		fi
+		# If ethernet and wireless adapter found, no need to keep searching
+		if [ -n "$wlan_adapter" ] && [ -n "lan_adapter" ]; then
+			echo "Wireless adapter and ethernet adapter found. Continuing to create mesh..."
+			break
+		fi 
+	done
+	
+	# If either the ethernet adapter or wireless adapter is not found, exit
+	if [ -z "$lan_adapter" ]; then
+		echo "Wireless adapter not found. Mesh will not be built."
+		exit 0
+	elif [ -z "$wlan_adapter" ]; then
+		echo "Ethernet adapter not found. Mesh will not be built."
+		exit 0
+	fi
+	# Create access point, passing adapter names as arguments
+	create_access_point "$wlan_adapter" "$lan_adapter"
+	
+	echo "Finished creating wireless mesh..."
+}
+
 
 # Source TS variables
 . `dirname $0`/common
@@ -265,7 +422,11 @@ fi
 
 #Wireless
 if [ "$NET_USE" == "WLAN" ] || [ "$NET_USE" == "BOTH" ]; then
-	create_wireless_system_connection
+	if [ "$NET_MESH" == "true" ]; then
+		create_wireless_mesh
+	else
+		create_wireless_system_connection
+	fi
 fi
 
 echo "Finished creating system connections for NetworkManager."
