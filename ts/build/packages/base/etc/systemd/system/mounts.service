@@ -2,7 +2,6 @@
 Description=ThinStation Local Mounts
 DefaultDependencies=no
 Conflicts=shutdown.target
-After=debug.service
 After=systemd-udev-settle.service
 Before=local-fs-pre.target local-fs.target shutdown.target
 Wants=local-fs-pre.target
@@ -13,3 +12,4 @@ RemainAfterExit=yes
 EnvironmentFile=/etc/thinstation.env
 ExecStart=/etc/init.d/mounts
 SyslogIdentifier=thinstation
+TimeoutStartSec=30s
